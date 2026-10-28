@@ -13,10 +13,13 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Outline;
 import android.graphics.PixelFormat;
+import android.graphics.PorterDuff;
 import android.graphics.Rect;
+import android.graphics.drawable.AdaptiveIconDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
+import android.os.Build;
 import android.provider.Settings;
 import android.util.DisplayMetrics;
 import android.view.KeyEvent;
@@ -80,6 +83,9 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         int ambient;
         /** uniform_tiles card fill, top and bottom colour; null until sampled from the icon. */
         int[] backdrop;
+        /** mono_logos: the layer drawn in white, or null for an icon shown as it is; set on first bind. */
+        Drawable mono;
+        boolean monoChecked;
 
         Entry(String label, ComponentName component, Drawable banner, Drawable icon) {
             this(APP, label, component, banner, icon, null, 0);
@@ -218,6 +224,8 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private final Map<String, String> appLabels, appBanners;
     /** Every app tile is its icon on a card tinted from that icon, never its banner (config.xml, uniform_tiles). */
     private final boolean uniformTiles;
+    /** Every app tile is its logo in plain white with no card (config.xml, mono_logos); uniformTiles is on too. */
+    private final boolean monoLogos;
     /** Packages drawn from their icon and name even when they have a banner (config.xml icon_tiles). */
     private final Set<String> iconTiles;
     private final List<Entry> items = new ArrayList<>();
@@ -248,6 +256,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         this.appLabels = cfg.appLabels;
         this.appBanners = cfg.appBanners;
         this.uniformTiles = cfg.uniformTiles;
+        this.monoLogos = cfg.monoLogos;
         // Tiles keep their identity across reload(), so a focused tile stays on its app instead of
         // its view being rebound to whatever app now sits in that slot.
         setHasStableIds(true);
@@ -438,7 +447,8 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             // tvOS-style tile: a large centred mark, no caption inside the card.
             View icon = v.findViewById(R.id.icon);
             FrameLayout.LayoutParams iconLp = (FrameLayout.LayoutParams) icon.getLayoutParams();
-            iconLp.width = iconLp.height = Math.round(h * ICON_SHARE);
+            // An adaptive icon's logo fills only the middle of its layer, so a white logo gets a larger box.
+            iconLp.width = iconLp.height = Math.round(h * (monoLogos ? MONO_SHARE : ICON_SHARE));
             iconLp.bottomMargin = 0;
             icon.setLayoutParams(iconLp);
         } else if (h < Math.round(DESIGN_H_DP * density)) {
@@ -490,7 +500,9 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         // A fully opaque banner covers the whole card (centerCrop), so the card's own fill under it is drawn for
         // nothing on every frame; keep it under banners with transparent parts and under icon tiles.
         h.card.setBackground(e.banner != null && e.banner.getOpacity() == PixelFormat.OPAQUE ? null : h.cardBackground);
-        if (uniformTiles && e.banner == null) {
+        if (monoLogos && e.banner == null) {
+            h.card.setBackground(null);   // the logo floats; the glass highlight marks the focused one
+        } else if (uniformTiles && e.banner == null) {
             if (e.backdrop == null) e.backdrop = backdrop(e.icon, ambientColorAt(position));
             h.card.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, e.backdrop));
         }
@@ -502,7 +514,20 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         } else {
             h.banner.setImageDrawable(null);
             h.banner.setVisibility(View.GONE);
-            h.icon.setImageDrawable(e.icon);
+            if (monoLogos && !e.monoChecked) {
+                e.mono = monoLayer(e.icon);
+                e.monoChecked = true;
+            }
+            boolean white = monoLogos && e.mono != null;
+            h.icon.setImageDrawable(white ? e.mono : e.icon);
+            if (white) h.icon.setColorFilter(Color.WHITE, PorterDuff.Mode.SRC_IN);
+            else h.icon.clearColorFilter();
+            if (monoLogos) {
+                // The MONO_SHARE box suits an adaptive layer; any other icon is drawn at the uniform_tiles size.
+                int pad = e.icon instanceof AdaptiveIconDrawable ? 0
+                        : Math.round(h.icon.getLayoutParams().width * (1f - ICON_SHARE / MONO_SHARE) / 2f);
+                h.icon.setPadding(pad, pad, pad, pad);
+            }
             h.icon.setVisibility(View.VISIBLE);
             h.label.setText(e.label);
             h.label.setVisibility(uniformTiles ? View.GONE : View.VISIBLE);
@@ -689,6 +714,28 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
     /** Share of the tile height the icon takes in uniform_tiles mode (onCreateViewHolder). */
     private static final float ICON_SHARE = 0.62f;
+    /** The same for mono_logos, whose adaptive layers keep the logo in their middle two thirds. */
+    private static final float MONO_SHARE = 0.95f;
+
+    /**
+     * The part of an app icon that mono_logos tints white: the monochrome layer an app made for themed icons
+     * (Android 13+), else the adaptive icon's foreground. A plain icon with transparent parts is tinted whole;
+     * an opaque one would turn into a white square, so it gets null and is shown as it is.
+     */
+    static Drawable monoLayer(Drawable icon) {
+        Drawable layer;
+        if (icon instanceof AdaptiveIconDrawable) {
+            AdaptiveIconDrawable adaptive = (AdaptiveIconDrawable) icon;
+            Drawable mono = Build.VERSION.SDK_INT >= 33 ? adaptive.getMonochrome() : null;
+            layer = mono != null ? mono : adaptive.getForeground();
+        } else {
+            layer = icon == null || icon.getOpacity() == PixelFormat.OPAQUE ? null : icon;
+        }
+        // A copy of its own: the tile tints it and sets its bounds, which must not reach the icon itself
+        // (the cinematic backdrop and the sampled colours still draw that one).
+        Drawable.ConstantState state = layer == null ? null : layer.getConstantState();
+        return state != null ? state.newDrawable().mutate() : layer;
+    }
 
     /**
      * The colour covering most of an icon, for a card that should read as that app: a small saturated badge
