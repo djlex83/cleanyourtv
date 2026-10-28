@@ -1,0 +1,18 @@
+{
+  "background_color": "#111110",
+  "wallpaper": true,
+  "wallpaper_rotation_minutes": 0,
+  "dock_glass": true,
+  "dock_opacity": 70,
+  "dock_title": false,
+  "glass_style": "rim",
+  "ambient_glow": false,
+  "app_glow": false,
+  "focus_overshoot": false,
+  "icon_only_buttons": true,
+  "date_below_clock": true,
+  "home_idle_clock_minutes": 5,
+  "clock_wallpaper": true,
+  "clock_wallpaper_dim": 40,
+  "clock_glow": false
+}
