@@ -522,6 +522,12 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             h.icon.setImageDrawable(white ? e.mono : e.icon);
             if (white) h.icon.setColorFilter(Color.WHITE, PorterDuff.Mode.SRC_IN);
             else h.icon.clearColorFilter();
+            if (monoLogos) {
+                // The MONO_SHARE box suits an adaptive layer; any other icon is drawn at the uniform_tiles size.
+                int pad = e.icon instanceof AdaptiveIconDrawable ? 0
+                        : Math.round(h.icon.getLayoutParams().width * (1f - ICON_SHARE / MONO_SHARE) / 2f);
+                h.icon.setPadding(pad, pad, pad, pad);
+            }
             h.icon.setVisibility(View.VISIBLE);
             h.label.setText(e.label);
             h.label.setVisibility(uniformTiles ? View.GONE : View.VISIBLE);
@@ -717,12 +723,18 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
      * an opaque one would turn into a white square, so it gets null and is shown as it is.
      */
     static Drawable monoLayer(Drawable icon) {
+        Drawable layer;
         if (icon instanceof AdaptiveIconDrawable) {
             AdaptiveIconDrawable adaptive = (AdaptiveIconDrawable) icon;
             Drawable mono = Build.VERSION.SDK_INT >= 33 ? adaptive.getMonochrome() : null;
-            return mono != null ? mono : adaptive.getForeground();
+            layer = mono != null ? mono : adaptive.getForeground();
+        } else {
+            layer = icon == null || icon.getOpacity() == PixelFormat.OPAQUE ? null : icon;
         }
-        return icon == null || icon.getOpacity() == PixelFormat.OPAQUE ? null : icon;
+        // A copy of its own: the tile tints it and sets its bounds, which must not reach the icon itself
+        // (the cinematic backdrop and the sampled colours still draw that one).
+        Drawable.ConstantState state = layer == null ? null : layer.getConstantState();
+        return state != null ? state.newDrawable().mutate() : layer;
     }
 
     /**
